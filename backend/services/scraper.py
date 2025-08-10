@@ -2,6 +2,7 @@ import asyncio
 import aiohttp
 import logging
 import os
+import time
 from urllib.parse import urljoin, urlparse
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, Page, Browser
@@ -16,6 +17,45 @@ class WebScraper:
         self.browser: Optional[Browser] = None
         self.playwright = None
         self.session: Optional[aiohttp.ClientSession] = None
+        
+        # Site-specific limits for problematic domains
+        self.PROBLEMATIC_SITES = {
+            'vcsheet.com': {
+                'max_scrolls': 3,
+                'max_items': 5000,
+                'max_time': 30,
+                'max_height': 100000,
+                'max_pages': 2
+            },
+            'crunchbase.com': {
+                'max_scrolls': 5,
+                'max_items': 10000,
+                'max_time': 45,
+                'max_height': 200000,
+                'max_pages': 3
+            },
+            'linkedin.com': {
+                'max_scrolls': 4,
+                'max_items': 3000,
+                'max_time': 40,
+                'max_height': 150000,
+                'max_pages': 2
+            },
+            'indeed.com': {
+                'max_scrolls': 6,
+                'max_items': 8000,
+                'max_time': 50,
+                'max_height': 300000,
+                'max_pages': 4
+            },
+            'glassdoor.com': {
+                'max_scrolls': 4,
+                'max_items': 4000,
+                'max_time': 35,
+                'max_height': 180000,
+                'max_pages': 2
+            }
+        }
         
     async def _ensure_browser(self):
         """Ensure Playwright browser is initialized"""
@@ -269,6 +309,29 @@ class WebScraper:
                 
         return True
     
+    def _get_site_specific_limits(self, url: str) -> Dict[str, int]:
+        """Get site-specific limits based on URL domain"""
+        try:
+            from urllib.parse import urlparse
+            domain = urlparse(url).netloc.lower()
+            
+            # Remove www. prefix for matching
+            if domain.startswith('www.'):
+                domain = domain[4:]
+            
+            # Check if domain matches any problematic site
+            for site_key, limits in self.PROBLEMATIC_SITES.items():
+                if site_key in domain:
+                    logger.info(f"Applying site-specific limits for {domain}: {limits}")
+                    return limits
+            
+            # Return empty dict for default limits
+            return {}
+            
+        except Exception as e:
+            logger.warning(f"Error getting site-specific limits: {e}")
+            return {}
+    
     async def cleanup(self):
         """Clean up resources"""
         if self.browser:
@@ -458,7 +521,7 @@ class WebScraper:
                 self._extract_emails_from_json(item, emails_set)
     
     async def _handle_dynamic_content(self, page: Page):
-        """Handle infinite scroll, pagination, and dynamic content loading"""
+        """Handle infinite scroll, pagination, and dynamic content loading with comprehensive limits"""
         logger.info("Handling dynamic content loading...")
         
         try:
@@ -467,17 +530,31 @@ class WebScraper:
                 logger.warning("Page was closed before dynamic content handling")
                 return
             
-            # Track initial content to detect changes
+            # Track initial content and timing
             initial_height = await page.evaluate('document.body.scrollHeight')
             initial_items_count = await self._count_content_items(page)
+            start_time = time.time()
             
-            max_scrolls = int(os.getenv('MAX_SCROLL_ATTEMPTS', 50))  # Limit to prevent infinite loops
-            max_pages = int(os.getenv('MAX_PAGINATION_PAGES', 10))    # Limit pagination clicks
+            # Get site-specific limits or use defaults
+            site_limits = self._get_site_specific_limits(page.url)
+            max_scrolls = site_limits.get('max_scrolls', int(os.getenv('MAX_SCROLL_ATTEMPTS', 20)))
+            max_pages = site_limits.get('max_pages', int(os.getenv('MAX_PAGINATION_PAGES', 5)))
+            max_time_seconds = site_limits.get('max_time', int(os.getenv('MAX_DYNAMIC_TIME', 60)))
+            max_height = site_limits.get('max_height', int(os.getenv('MAX_PAGE_HEIGHT', 500000)))
+            max_items = site_limits.get('max_items', int(os.getenv('MAX_CONTENT_ITEMS', 50000)))
+            
+            logger.info(f"Using limits for site: scrolls={max_scrolls}, items={max_items}, time={max_time_seconds}s")
+            
             scroll_attempts = 0
             page_attempts = 0
             no_change_count = 0
+            last_significant_change = start_time
+            consecutive_large_changes = 0
+            max_consecutive_changes = 5  # Stop after 5 consecutive large changes
             
-            while scroll_attempts < max_scrolls and no_change_count < 3:
+            while (scroll_attempts < max_scrolls and 
+                   no_change_count < 3 and
+                   time.time() - start_time < max_time_seconds):
                 try:
                     # Check if page is still accessible
                     if page.is_closed():
@@ -485,19 +562,21 @@ class WebScraper:
                         break
                     
                     scroll_attempts += 1
+                    current_time = time.time()
                     
                     # Method 1: Try infinite scroll
                     await self._perform_infinite_scroll(page)
                     
-                    # Method 2: Look for pagination buttons
-                    if scroll_attempts % 5 == 0 and page_attempts < max_pages:  # Try pagination every 5 scrolls
+                    # Method 2: Look for pagination buttons (less frequently)
+                    if scroll_attempts % 8 == 0 and page_attempts < max_pages:  # Every 8 scrolls instead of 5
                         pagination_success = await self._handle_pagination(page)
                         if pagination_success:
                             page_attempts += 1
-                            await page.wait_for_timeout(3000)  # Wait after pagination
+                            await page.wait_for_timeout(2000)  # Reduced wait time
                     
-                    # Method 3: Look for "Load More" buttons
-                    await self._click_load_more_buttons(page)
+                    # Method 3: Look for "Load More" buttons (less frequently)
+                    if scroll_attempts % 4 == 0:  # Only every 4th scroll
+                        await self._click_load_more_buttons(page)
                     
                     # Check if content has changed
                     try:
@@ -507,17 +586,54 @@ class WebScraper:
                         logger.warning(f"Failed to evaluate page content: {eval_error}")
                         break
                     
-                    if new_height > initial_height or new_items_count > initial_items_count:
-                        logger.info(f"Content expanded - Height: {initial_height}→{new_height}, Items: {initial_items_count}→{new_items_count}")
+                    # Check comprehensive limits
+                    if new_height > max_height:
+                        logger.warning(f"Page height limit reached: {new_height} > {max_height}px")
+                        break
+                    
+                    if new_items_count > max_items:
+                        logger.warning(f"Content items limit reached: {new_items_count} > {max_items} items")
+                        break
+                    
+                    # Detect significant changes (not just any change)
+                    height_change = new_height - initial_height
+                    items_change = new_items_count - initial_items_count
+                    
+                    # CRITICAL FIX: Much stricter thresholds to prevent infinite loops
+                    significant_change = (height_change > 5000) or (items_change > 1000)
+                    
+                    # CRITICAL FIX: Detect excessive growth patterns
+                    if items_change > 5000:
+                        logger.warning(f"Excessive content growth detected: +{items_change} items in one iteration")
+                        logger.warning("Stopping to prevent infinite expansion")
+                        break
+                    
+                    # CRITICAL FIX: Track consecutive large changes
+                    if items_change > 2000:  # Large change threshold
+                        consecutive_large_changes += 1
+                        if consecutive_large_changes >= max_consecutive_changes:
+                            logger.warning(f"Too many consecutive large changes ({consecutive_large_changes}), stopping")
+                            break
+                    else:
+                        consecutive_large_changes = 0  # Reset counter
+                    
+                    if significant_change:
+                        logger.info(f"Content expanded - Height: {initial_height}→{new_height} (+{height_change}), Items: {initial_items_count}→{new_items_count} (+{items_change})")
                         initial_height = new_height
                         initial_items_count = new_items_count
                         no_change_count = 0
+                        last_significant_change = current_time
                         
-                        # Wait for new content to load
-                        await page.wait_for_timeout(2000)
+                        # Shorter wait for new content
+                        await page.wait_for_timeout(1500)  # Reduced from 2000
                     else:
                         no_change_count += 1
-                        await page.wait_for_timeout(1000)
+                        await page.wait_for_timeout(800)   # Reduced from 1000
+                        
+                        # Additional check: if no significant change for too long, stop
+                        if current_time - last_significant_change > 20:  # 20 seconds
+                            logger.info("No significant content changes for 20 seconds, stopping dynamic loading")
+                            break
                         
                 except Exception as e:
                     logger.warning(f"Error during dynamic content loading (attempt {scroll_attempts}): {e}")
@@ -527,11 +643,28 @@ class WebScraper:
                     # Continue with next attempt
                     no_change_count += 1
             
+            # Final summary with time and limits info
             try:
                 final_items_count = await self._count_content_items(page) if not page.is_closed() else initial_items_count
-                logger.info(f"Dynamic content loading complete - Final items: {final_items_count}, Scrolls: {scroll_attempts}, Pages: {page_attempts}")
+                final_height = await page.evaluate('document.body.scrollHeight') if not page.is_closed() else initial_height
+                total_time = time.time() - start_time
+                
+                # Determine why we stopped
+                stop_reason = "completed"
+                if scroll_attempts >= max_scrolls:
+                    stop_reason = "max_scrolls_reached"
+                elif total_time >= max_time_seconds:
+                    stop_reason = "time_limit_reached"
+                elif final_height >= max_height:
+                    stop_reason = "height_limit_reached"
+                elif final_items_count >= max_items:
+                    stop_reason = "items_limit_reached"
+                elif no_change_count >= 3:
+                    stop_reason = "no_changes_detected"
+                
+                logger.info(f"Dynamic content loading {stop_reason} - Final: {final_items_count} items, {final_height}px height, {scroll_attempts} scrolls, {page_attempts} pages, {total_time:.1f}s")
             except Exception as e:
-                logger.warning(f"Could not get final item count: {e}")
+                logger.warning(f"Could not get final statistics: {e}")
                 
         except Exception as e:
             logger.error(f"Dynamic content handling failed: {e}")

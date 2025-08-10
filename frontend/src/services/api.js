@@ -94,6 +94,16 @@ export const apiService = {
     }
   },
 
+  // Cancel a running job
+  async cancelJob(jobId) {
+    try {
+      const response = await api.post(`/cancel/${jobId}`);
+      return response.data;
+    } catch (error) {
+      throw new Error(`Failed to cancel job: ${error.message}`);
+    }
+  },
+
   // Download result file
   async downloadResult(jobId, format) {
     try {
@@ -154,5 +164,16 @@ export const apiService = {
     }
   }
 };
+
+// Named exports for convenient importing
+export const { 
+  checkHealth, 
+  createScrapeJob, 
+  getJobStatus, 
+  getJobResult, 
+  cancelJob, 
+  downloadResult, 
+  connectWebSocket 
+} = apiService;
 
 export default apiService;

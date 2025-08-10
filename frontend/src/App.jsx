@@ -204,9 +204,43 @@ function App() {
           {/* Progress Tracker */}
           {jobStatus && (
             <ProgressTracker 
+              jobId={currentJob}
               status={jobStatus.status}
               message={jobStatus.message}
               processingTime={jobResult?.processing_time}
+              onUpdate={(progressData) => {
+                // Handle real-time progress updates
+                setJobStatus({
+                  status: progressData.stage === 'completed' ? 'completed' : 
+                         progressData.stage === 'failed' ? 'failed' : 
+                         progressData.stage === 'cancelled' ? 'failed' :
+                         progressData.stage === 'timeout' ? 'failed' : 'processing',
+                  message: progressData.message
+                });
+                
+                // Handle job completion/failure from WebSocket
+                if (progressData.stage === 'completed' || 
+                    progressData.stage === 'failed' || 
+                    progressData.stage === 'cancelled' ||
+                    progressData.stage === 'timeout') {
+                  setIsLoading(false);
+                  
+                  if (websocketRef.current) {
+                    websocketRef.current.close();
+                  }
+                  
+                  if (statusCheckIntervalRef.current) {
+                    clearInterval(statusCheckIntervalRef.current);
+                  }
+                  
+                  // Fetch result if completed
+                  if (progressData.stage === 'completed') {
+                    apiService.getJobResult(currentJob)
+                      .then(result => setJobResult(result))
+                      .catch(err => setError(`Failed to fetch result: ${err.message}`));
+                  }
+                }
+              }}
             />
           )}
 
