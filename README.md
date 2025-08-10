@@ -1,9 +1,19 @@
 # 🦅 Falcon Parse
 
-AI-powered web scraping and data extraction tool that uses Gemini AI to intelligently extract structured data from any website.
+**Version 1.1** - AI-powered web scraping and data extraction tool that uses Gemini AI to intelligently extract structured data from any website.
 
 ## ✨ Features
 
+### 🚀 New in v1.1
+- **Job Timeout Protection**: Automatic 5-minute timeout prevents infinite running jobs
+- **User-Controlled Cancellation**: Cancel stuck or long-running jobs with one click
+- **Stuck Job Detection**: Visual warnings when jobs haven't progressed for 30+ seconds
+- **Site-Specific Optimization**: Pre-configured limits for problematic sites (vcsheet.com, crunchbase.com, etc.)
+- **Enhanced Progress Tracking**: Real-time stage updates with detailed progress indicators
+- **Automatic Job Cleanup**: Jobs older than 2 hours are automatically removed
+- **Infinite Loop Prevention**: Multi-layered safeguards prevent runaway scraping operations
+
+### 🎯 Core Features
 - **Smart Data Extraction**: Uses Gemini AI to understand and extract specific data types from web pages
 - **Advanced Dynamic Content Handling**: Automatically handles infinite scroll, pagination, and "Load More" buttons
 - **Multiple Scraping Methods**: Combines BeautifulSoup and Playwright for maximum compatibility
@@ -140,14 +150,39 @@ npm run dev
 # Required
 GEMINI_API_KEY=your_gemini_api_key_here
 
-# Optional
+# Server Configuration
 BACKEND_PORT=8010
 FRONTEND_PORT=3010
 BACKEND_HOST=0.0.0.0
 MAX_CONCURRENT_SCRAPES=5
 SCRAPE_TIMEOUT=30
 TEMP_FILE_CLEANUP_HOURS=24
+
+# Enhanced Scraping Limits (New in v1.1)
+MAX_SCROLL_ATTEMPTS=20           # Maximum scroll attempts
+MAX_PAGINATION_PAGES=5           # Maximum pagination clicks  
+MAX_DYNAMIC_TIME=60              # Max seconds for dynamic content
+MAX_PAGE_HEIGHT=500000           # Max page height in pixels
+MAX_CONTENT_ITEMS=50000          # Max content items before stopping
+
+# Advanced Safeguards (New in v1.1)
+SIGNIFICANT_HEIGHT_CHANGE=5000   # Threshold for significant changes
+SIGNIFICANT_ITEMS_CHANGE=1000    # Items change threshold
+EXCESSIVE_GROWTH_THRESHOLD=5000  # Stop if single iteration adds this many items
+MAX_CONSECUTIVE_CHANGES=5        # Max consecutive large changes
+
+# Development Settings (New in v1.1)
+LOG_LEVEL=INFO
+DEBUG_MODE=false
 ```
+
+### Site-Specific Optimizations (New in v1.1)
+Falcon Parse automatically applies optimized limits for known problematic sites:
+- **vcsheet.com**: 3 scrolls, 5000 items, 30 seconds
+- **crunchbase.com**: 5 scrolls, 10000 items, 45 seconds  
+- **linkedin.com**: 4 scrolls, 3000 items, 40 seconds
+- **indeed.com**: 6 scrolls, 8000 items, 50 seconds
+- **glassdoor.com**: 4 scrolls, 4000 items, 35 seconds
 
 ### Port Configuration
 - **Frontend**: http://localhost:3010
@@ -161,7 +196,8 @@ TEMP_FILE_CLEANUP_HOURS=24
 - `GET /status/{job_id}` - Check job status  
 - `GET /result/{job_id}` - Get extraction results
 - `GET /download/{job_id}/{format}` - Download files
-- `WS /ws/{job_id}` - Real-time updates
+- `POST /cancel/{job_id}` - Cancel running job *(New in v1.1)*
+- `WS /ws/{job_id}` - Real-time updates with enhanced progress tracking
 
 ### Example API Usage
 ```javascript
@@ -214,6 +250,17 @@ lsof -ti:3010 | xargs kill -9  # Frontend
    - Check API quotas and billing
    - Verify key has proper permissions
 
+5. **Jobs getting stuck (Fixed in v1.1)**
+   - Use the cancel button if a job appears stuck
+   - Jobs automatically timeout after 5 minutes
+   - Check if site has aggressive anti-bot measures
+   - Site-specific limits automatically prevent infinite loops
+
+6. **Performance issues with large sites**
+   - Configure limits in .env file for your use case
+   - Use site-specific optimizations for known problematic domains
+   - Monitor logs for excessive growth warnings
+
 ### Logs
 ```bash
 # View backend logs
@@ -244,6 +291,11 @@ The app uses a custom CSS design system in `frontend/src/index.css` with CSS var
 ## 📝 License
 
 This project is for educational and personal use. Please respect website terms of service and robots.txt when scraping.
+
+## 📋 Release Notes
+
+For detailed information about version updates and new features, see:
+- [Release Notes v1.1](RELEASE_NOTES_v1.1.md) - Comprehensive job management and infinite loop prevention
 
 ## 🤝 Contributing
 
